@@ -1,209 +1,260 @@
 # AaTurpin.PSConfig
 
-A PowerShell module for reading and parsing JSON configuration files with enhanced validation, error handling, and automatic compilation of regex exclusion patterns for optimized file filtering operations.
+PowerShell module for managing JSON configuration files with drive mappings, monitored directories, and staging area settings. Provides thread-safe configuration management with validation and comprehensive error handling.
 
 ## Features
 
-- **Robust JSON Parsing**: Read and validate JSON configuration files with comprehensive error handling
-- **Enhanced Validation**: Automatic validation of required properties with sensible defaults
-- **Regex Pattern Compilation**: Pre-compiles exclusion patterns for optimal performance in file filtering operations
-- **Comprehensive Logging**: Seamless integration with `AaTurpin.PSLogger` for detailed operation logging
-- **Error Recovery**: Graceful handling of malformed configuration entries with detailed logging
-- **Thread-Safe**: Designed to work safely in multi-threaded environments
+- **JSON Configuration Management**: Read, create, and modify JSON-based configuration files
+- **Drive Mapping Management**: Add, remove, and modify network drive mappings
+- **Directory Monitoring**: Configure directories for monitoring with exclusion support
+- **Staging Area Configuration**: Set and manage staging area paths
+- **Thread-Safe Logging**: Integrated with AaTurpin.PSLogger for comprehensive logging
+- **Input Validation**: Robust validation for all configuration parameters
+- **Error Handling**: Comprehensive exception handling with detailed logging
 
 ## Installation
 
-### From NuGet.org (Recommended)
+Install from the PowerShell Gallery:
+
 ```powershell
-# Register NuGet as a package source if not already done
-Register-PackageSource -Name NuGet -Location https://www.nuget.org/api/v2 -ProviderName NuGet
+Install-Module -Name AaTurpin.PSConfig -Scope CurrentUser
+```
 
-# Install the module
-Install-Package -Name AaTurpin.PSConfig -Source NuGet -Scope CurrentUser
+Or for all users (requires administrator privileges):
 
+```powershell
+Install-Module -Name AaTurpin.PSConfig -Scope AllUsers
+```
+
+## Requirements
+
+- **PowerShell**: 5.1 or later
+- **Dependencies**: AaTurpin.PSLogger (automatically installed)
+
+## Quick Start
+
+```powershell
 # Import the module
 Import-Module AaTurpin.PSConfig
+
+# Create a new configuration file with defaults
+$config = New-SettingsFile -LogPath "C:\Logs\config.log"
+
+# Read an existing configuration
+$config = Read-SettingsFile -LogPath "C:\Logs\config.log"
+
+# Set the staging area
+Set-StagingArea -StagingAreaPath "D:\MyStaging" -LogPath "C:\Logs\config.log"
+
+# Add a drive mapping
+Add-DriveMapping -Letter "X" -Path "\\server\share" -LogPath "C:\Logs\config.log"
+
+# Add a monitored directory with exclusions
+Add-MonitoredDirectory -Path "V:\aeapps\tools" -Exclusions @("temp", "logs") -LogPath "C:\Logs\config.log"
 ```
 
-### Alternative NuGet Installation
-```powershell
-# Using PackageManagement
-Find-Package -Name AaTurpin.PSConfig -Source NuGet | Install-Package -Scope CurrentUser
-```
+## Configuration File Structure
 
-### Manual Installation
-1. Download the `.nupkg` file from [NuGet.org](https://www.nuget.org/packages/AaTurpin.PSConfig/)
-2. Extract the package contents
-3. Copy the module files to your PowerShell modules directory:
-   - Windows: `$env:USERPROFILE\Documents\PowerShell\Modules\AaTurpin.PSConfig\`
-   - Linux/macOS: `~/.local/share/powershell/Modules/AaTurpin.PSConfig/`
-4. Import the module:
-```powershell
-Import-Module AaTurpin.PSConfig
-```
-
-## Dependencies
-
-- **AaTurpin.PSLogger** (v1.0.0+) - Required for logging functionality
-- **PowerShell 5.1+** - Minimum PowerShell version
-
-## Usage
-
-### Basic Example
-
-```powershell
-# Import the required modules
-Import-Module AaTurpin.PSLogger
-Import-Module AaTurpin.PSConfig
-
-# Read a settings file
-$settings = Read-SettingsFile -SettingsPath "C:\Config\settings.json" -LogPath "C:\Logs\app.log"
-
-# Access the parsed settings
-Write-Host "Staging Area: $($settings.stagingArea)"
-Write-Host "V-Drive Path: $($settings.vDrivePath)"
-Write-Host "Monitored Directories: $($settings.monitoredDirectories.Count)"
-```
-
-### Advanced Usage with Compiled Exclusion Patterns
-
-```powershell
-# Read settings with automatic pattern compilation
-$settings = Read-SettingsFile -SettingsPath "settings.json" -LogPath "app.log"
-
-# Use the compiled patterns for efficient file filtering
-foreach ($directory in $settings.monitoredDirectories) {
-    Write-Host "Directory: $($directory.path)"
-    Write-Host "Exclusions: $($directory.exclusions -join ', ')"
-    
-    # Access pre-compiled regex patterns for performance
-    if ($directory.compiledExclusionPatterns) {
-        Write-Host "Compiled patterns available: $($directory.compiledExclusionPatterns.Count)"
-    }
-}
-```
-
-## Configuration File Format
-
-The module expects JSON configuration files with the following structure:
+The module manages JSON configuration files with the following structure:
 
 ```json
 {
   "stagingArea": "C:\\StagingArea",
-  "vDrivePath": "\\\\server\\share\\path",
+  "driveMappings": [
+    {
+      "letter": "V",
+      "path": "\\\\server\\eng_apps"
+    }
+  ],
   "monitoredDirectories": [
     {
-      "path": "V:\\apps\\toolset1",
+      "path": "V:\\aeapps\\tools",
       "exclusions": ["temp", "logs", "cache"]
-    },
-    {
-      "path": "V:\\apps\\toolset2",
-      "exclusions": ["debug", "test"]
     }
   ]
 }
 ```
 
-### Configuration Properties
+## Available Commands
 
-| Property | Type | Required | Description |
-|----------|------|----------|-------------|
-| `stagingArea` | String | No* | Local staging directory path (defaults to "C:\StagingArea") |
-| `vDrivePath` | String | Yes | Network share UNC path |
-| `monitoredDirectories` | Array | No | Array of directory objects to monitor |
-| `monitoredDirectories[].path` | String | Yes | Directory path to monitor |
-| `monitoredDirectories[].exclusions` | Array | No | Subdirectories to exclude from processing |
+### Configuration File Management
 
-*If `stagingArea` is missing, the module will automatically set it to "C:\StagingArea" and log a warning.
+#### `Read-SettingsFile`
+Reads and validates a JSON configuration file.
 
-## Functions
-
-### Read-SettingsFile
-
-Reads and parses a JSON configuration file with enhanced validation and automatic regex pattern compilation.
-
-#### Syntax
 ```powershell
-Read-SettingsFile [-SettingsPath <String>] -LogPath <String>
+$config = Read-SettingsFile -SettingsPath "config.json" -LogPath "C:\Logs\app.log"
 ```
 
-#### Parameters
+**Parameters:**
+- `SettingsPath` (optional): Path to settings.json file (defaults to "settings.json")
+- `LogPath` (required): Path to log file for operations
 
-- **SettingsPath** (Optional): Path to the JSON settings file. Defaults to "settings.json" in the current directory.
-- **LogPath** (Required): Path to the log file for operation logging.
+#### `New-SettingsFile`
+Creates a new configuration file with default values.
 
-#### Returns
-`PSCustomObject` containing the parsed settings with compiled exclusion patterns.
-
-#### Example
 ```powershell
-$config = Read-SettingsFile -SettingsPath "C:\Config\app-settings.json" -LogPath "C:\Logs\config.log"
+$config = New-SettingsFile -SettingsPath "config.json" -LogPath "C:\Logs\app.log" -StagingArea "D:\Staging"
 ```
 
-## Error Handling
+**Parameters:**
+- `SettingsPath` (optional): Path for new settings file (defaults to "settings.json")
+- `LogPath` (required): Path to log file
+- `StagingArea` (optional): Custom staging area path (defaults to "C:\StagingArea")
 
-The module provides comprehensive error handling:
+### Staging Area Management
 
-- **File Not Found**: Clear error message when settings file doesn't exist
-- **Empty Files**: Detection and reporting of empty configuration files
-- **Invalid JSON**: Detailed parsing error messages for malformed JSON
-- **Missing Properties**: Automatic default value assignment with warnings
-- **Malformed Entries**: Graceful skipping of invalid directory entries with logging
+#### `Set-StagingArea`
+Updates the staging area path in the configuration.
 
-## Performance Optimizations
+```powershell
+Set-StagingArea -StagingAreaPath "E:\NewStaging" -LogPath "C:\Logs\app.log"
+```
 
-- **Pre-compiled Regex**: Exclusion patterns are compiled once during settings load for optimal performance
-- **Efficient Validation**: Streamlined property validation with minimal overhead
-- **Memory Efficient**: Careful object creation and cleanup
-- **Batch Processing**: Optimized handling of large directory arrays
+**Parameters:**
+- `StagingAreaPath` (required): New staging area path
+- `SettingsPath` (optional): Path to settings file
+- `LogPath` (required): Path to log file
 
-## Logging Integration
+### Drive Mapping Management
 
-All operations are logged using the `AaTurpin.PSLogger` module with appropriate log levels:
+#### `Add-DriveMapping`
+Adds a new network drive mapping.
 
-- **Info**: Successful operations and status updates
-- **Warning**: Non-critical issues like missing optional properties
-- **Error**: Critical errors that prevent operation completion
-- **Debug**: Detailed operation information for troubleshooting
+```powershell
+Add-DriveMapping -Letter "Y" -Path "\\nas\data" -LogPath "C:\Logs\app.log"
+```
 
-## Compatibility
+**Parameters:**
+- `Letter` (required): Single alphabetic character for drive letter
+- `Path` (required): UNC path (must start with \\)
+- `SettingsPath` (optional): Path to settings file
+- `LogPath` (required): Path to log file
 
-- **Windows PowerShell 5.1+**
-- **PowerShell Core 6.0+**
-- **Windows, Linux, macOS** (PowerShell Core)
+#### `Remove-DriveMapping`
+Removes an existing drive mapping.
 
-## Contributing
+```powershell
+Remove-DriveMapping -Letter "Y" -LogPath "C:\Logs\app.log"
+```
 
-Contributions are welcome! Please feel free to submit issues and pull requests.
+#### `Set-DriveMapping`
+Modifies the path of an existing drive mapping.
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+```powershell
+Set-DriveMapping -Letter "Y" -Path "\\newserver\data" -LogPath "C:\Logs\app.log"
+```
+
+### Monitored Directory Management
+
+#### `Add-MonitoredDirectory`
+Adds a directory to the monitoring configuration.
+
+```powershell
+Add-MonitoredDirectory -Path "V:\aeapps\newtools" -Exclusions @("temp", "cache") -LogPath "C:\Logs\app.log"
+```
+
+**Parameters:**
+- `Path` (required): Directory path to monitor
+- `Exclusions` (optional): Array of subdirectory names to exclude
+- `SettingsPath` (optional): Path to settings file
+- `LogPath` (required): Path to log file
+
+#### `Remove-MonitoredDirectory`
+Removes a directory from monitoring configuration.
+
+```powershell
+Remove-MonitoredDirectory -Path "V:\aeapps\oldtools" -LogPath "C:\Logs\app.log"
+```
+
+#### `Set-MonitoredDirectory`
+Updates the exclusions list for a monitored directory.
+
+```powershell
+Set-MonitoredDirectory -Path "V:\aeapps\tools" -Exclusions @("logs", "temp", "backup") -LogPath "C:\Logs\app.log"
+```
+
+## Examples
+
+### Complete Configuration Setup
+
+```powershell
+# Import required modules
+Import-Module AaTurpin.PSConfig
+
+# Define log path
+$logPath = "C:\Logs\config-setup.log"
+
+# Create new configuration file
+$config = New-SettingsFile -SettingsPath ".\myapp-config.json" -LogPath $logPath -StagingArea "D:\AppStaging"
+
+# Add multiple drive mappings
+Add-DriveMapping -Letter "V" -Path "\\server\eng_apps" -SettingsPath ".\myapp-config.json" -LogPath $logPath
+Add-DriveMapping -Letter "W" -Path "\\nas\shared_data" -SettingsPath ".\myapp-config.json" -LogPath $logPath
+
+# Add monitored directories with exclusions
+Add-MonitoredDirectory -Path "V:\aeapps\fc_tools" -SettingsPath ".\myapp-config.json" -LogPath $logPath
+Add-MonitoredDirectory -Path "V:\aeapps\dynamics" -Exclusions @("temp", "logs") -SettingsPath ".\myapp-config.json" -LogPath $logPath
+Add-MonitoredDirectory -Path "W:\projects" -Exclusions @("backup", "archive", ".git") -SettingsPath ".\myapp-config.json" -LogPath $logPath
+
+# Verify final configuration
+$finalConfig = Read-SettingsFile -SettingsPath ".\myapp-config.json" -LogPath $logPath
+Write-Host "Configuration complete: $($finalConfig.driveMappings.Count) drives, $($finalConfig.monitoredDirectories.Count) directories"
+```
+
+### Configuration Maintenance
+
+```powershell
+$logPath = "C:\Logs\maintenance.log"
+$settingsPath = ".\production-config.json"
+
+# Read current configuration
+$config = Read-SettingsFile -SettingsPath $settingsPath -LogPath $logPath
+
+# Update staging area
+Set-StagingArea -StagingAreaPath "E:\NewProductionStaging" -SettingsPath $settingsPath -LogPath $logPath
+
+# Modify existing drive mapping
+Set-DriveMapping -Letter "V" -Path "\\newserver\eng_apps" -SettingsPath $settingsPath -LogPath $logPath
+
+# Update exclusions for a monitored directory
+Set-MonitoredDirectory -Path "V:\aeapps\tools" -Exclusions @("temp", "logs", "cache", "debug") -SettingsPath $settingsPath -LogPath $logPath
+
+# Remove obsolete monitored directory
+Remove-MonitoredDirectory -Path "V:\old_tools" -SettingsPath $settingsPath -LogPath $logPath
+```
+
+## Validation and Error Handling
+
+The module includes comprehensive validation:
+
+- **Drive Letters**: Must be single alphabetic characters
+- **UNC Paths**: Must start with `\\` and be properly formatted
+- **Uniqueness**: Drive letters and monitored directory paths must be unique
+- **JSON Structure**: Automatic validation and repair of configuration structure
+- **File Operations**: Thread-safe file operations with retry logic
+
+All operations are logged using the AaTurpin.PSLogger module for complete audit trails.
+
+## Thread Safety
+
+The module integrates with AaTurpin.PSLogger to provide thread-safe file operations, making it suitable for:
+
+- Multi-threaded applications
+- Concurrent PowerShell sessions
+- Automated scripts running simultaneously
+- Enterprise environments with shared configuration files
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](https://github.com/aturpin0504/AaTurpin.PSConfig?tab=MIT-1-ov-file) for details.
 
-## Changelog
+## Project Links
 
-### v1.0.0 (2025-07-01)
-- Initial release
-- JSON configuration file parsing
-- Enhanced validation and error handling
-- Automatic regex pattern compilation
-- Integration with AaTurpin.PSLogger
-- Comprehensive documentation and examples
+- **GitHub Repository**: [https://github.com/aturpin0504/AaTurpin.PSConfig](https://github.com/aturpin0504/AaTurpin.PSConfig)
+- **PowerShell Gallery**: [AaTurpin.PSConfig](https://www.powershellgallery.com/packages/AaTurpin.PSConfig)
+- **Dependencies**: [AaTurpin.PSLogger](https://www.powershellgallery.com/packages/AaTurpin.PSLogger)
 
 ## Support
 
-If you encounter any issues or have questions:
-
-1. Check the [Issues](https://github.com/aturpin0504/AaTurpin.PSConfig/issues) page
-2. Create a new issue with detailed information
-3. Include relevant log files and configuration examples
-
-## Related Modules
-
-- **[AaTurpin.PSLogger](https://github.com/aturpin0504/AaTurpin.PSLogger)** - Thread-safe logging capabilities
+For issues, feature requests, or contributions, please visit the [GitHub repository](https://github.com/aturpin0504/AaTurpin.PSConfig).
