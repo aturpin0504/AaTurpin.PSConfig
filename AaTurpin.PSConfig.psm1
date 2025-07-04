@@ -8,6 +8,10 @@
         drive mappings and monitored directories, and returns a PowerShell object
         containing the configuration settings. If the settings file doesn't exist,
         it will be created automatically using New-SettingsFile.
+        
+        The function now pre-compiles regex patterns for monitored directory exclusions
+        to improve performance during file system operations. Original exclusions are
+        preserved for readability and configuration management.
     
     .PARAMETER SettingsPath
         The path to the settings.json file. Defaults to "settings.json" in current directory.
@@ -22,7 +26,7 @@
         $config = Read-SettingsFile -SettingsPath "C:\Config\settings.json" -LogPath "C:\Logs\app.log"
     
     .OUTPUTS
-        PSCustomObject containing the validated settings configuration.
+        PSCustomObject containing the validated settings configuration with pre-compiled exclusion patterns.
     #>
     [CmdletBinding()]
     param(
@@ -34,6 +38,22 @@
     )
     
     Write-LogInfo -LogPath $LogPath -Message "Reading settings from: $SettingsPath"
+    
+    # Memory management: Cleanup compiled patterns on error
+    trap {
+        Write-LogError -LogPath $LogPath -Message "Critical error occurred, cleaning up compiled regex patterns" -Exception $_.Exception
+        if ($settings -and $settings.monitoredDirectories) {
+            $settings.monitoredDirectories | ForEach-Object {
+                if ($_.compiledExclusionPatterns) {
+                    $_.compiledExclusionPatterns | ForEach-Object { 
+                        try { $_.Dispose() } catch { } 
+                    }
+                    $_.compiledExclusionPatterns = @()
+                }
+            }
+        }
+        throw
+    }
     
     try {
         # Check if file exists, create if not
@@ -74,18 +94,73 @@
         }
         $settings.driveMappings = $validDriveMappings
         
-        # Validate monitored directories
+        # Validate monitored directories and pre-compile exclusion patterns
         $validMonitoredDirs = @()
         if ($settings.monitoredDirectories -and $settings.monitoredDirectories.Count -gt 0) {
-            foreach ($dir in $settings.monitoredDirectories) {
-                if (Test-MonitoredDirectory -Directory $dir -LogPath $LogPath) {
-                    $validMonitoredDirs += $dir
+            foreach ($directory in $settings.monitoredDirectories) {
+                if (Test-MonitoredDirectory -Directory $directory -LogPath $LogPath) {
+                    # Pre-compile exclusion patterns for performance
+                    if ($directory.exclusions -and $directory.exclusions.Count -gt 0) {
+                        try {
+                            # Normalize exclusions (trim slashes, convert to backslashes, lowercase)
+                            $normalizedExclusions = $directory.exclusions | ForEach-Object {
+                                $_.Trim('\', '/').Replace('/', '\').ToLowerInvariant()
+                            }
+                            
+                            # Create compiled regex patterns for exact matching
+                            $exclusionPatterns = $normalizedExclusions | ForEach-Object {
+                                try {
+                                    [regex]::new("^$([regex]::Escape($_))($|\\)", 
+                                        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor 
+                                        [System.Text.RegularExpressions.RegexOptions]::Compiled)
+                                }
+                                catch [System.ArgumentException] {
+                                    Write-LogWarning -LogPath $LogPath -Message "Invalid regex pattern in exclusion '$_' for directory '$($directory.path)': $($_.Exception.Message)"
+                                    $null  # Skip this pattern
+                                }
+                                catch {
+                                    Write-LogWarning -LogPath $LogPath -Message "Unexpected error compiling exclusion '$_' for directory '$($directory.path)': $($_.Exception.Message)"
+                                    $null  # Skip this pattern
+                                }
+                            } | Where-Object { $_ -ne $null }  # Filter out failed patterns
+                            
+                            # Add compiled patterns as a separate property (preserving original exclusions)
+                            $directory | Add-Member -MemberType NoteProperty -Name "compiledExclusionPatterns" -Value $exclusionPatterns -Force
+                            
+                            $successCount = $exclusionPatterns.Count
+                            $totalCount = $directory.exclusions.Count
+                            if ($successCount -eq $totalCount) {
+                                Write-LogDebug -LogPath $LogPath -Message "Pre-compiled $successCount exclusion patterns for directory: $($directory.path)"
+                            } else {
+                                Write-LogWarning -LogPath $LogPath -Message "Pre-compiled $successCount of $totalCount exclusion patterns for directory: $($directory.path) (some patterns failed)"
+                            }
+                        }
+                        catch [System.ArgumentException] {
+                            Write-LogWarning -LogPath $LogPath -Message "Invalid regex pattern in exclusions for directory '$($directory.path)': $($_.Exception.Message)" -Exception $_.Exception
+                            # Add empty patterns array if compilation fails
+                            $directory | Add-Member -MemberType NoteProperty -Name "compiledExclusionPatterns" -Value @() -Force
+                        }
+                        catch {
+                            Write-LogWarning -LogPath $LogPath -Message "Unexpected error compiling exclusion patterns for directory '$($directory.path)': $($_.Exception.Message)" -Exception $_.Exception
+                            # Add empty patterns array if compilation fails
+                            $directory | Add-Member -MemberType NoteProperty -Name "compiledExclusionPatterns" -Value @() -Force
+                        }
+                    }
+                    else {
+                        # No exclusions to compile - add empty patterns array
+                        $directory | Add-Member -MemberType NoteProperty -Name "compiledExclusionPatterns" -Value @() -Force
+                        Write-LogDebug -LogPath $LogPath -Message "No exclusions to compile for directory: $($directory.path)"
+                    }
+                    
+                    $validMonitoredDirs += $directory
                 }
             }
         }
         $settings.monitoredDirectories = $validMonitoredDirs
         
-        Write-LogInfo -LogPath $LogPath -Message "Configuration loaded: $($validDriveMappings.Count) drive mappings, $($validMonitoredDirs.Count) monitored directories"
+        $totalPatterns = ($validMonitoredDirs | ForEach-Object { $_.compiledExclusionPatterns.Count } | Measure-Object -Sum).Sum
+        Write-LogInfo -LogPath $LogPath -Message "Configuration loaded: $($validDriveMappings.Count) drive mappings, $($validMonitoredDirs.Count) monitored directories, $totalPatterns total compiled exclusion patterns"
+        
         return $settings
     }
     catch {

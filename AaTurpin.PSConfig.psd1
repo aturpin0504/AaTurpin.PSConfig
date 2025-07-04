@@ -12,7 +12,7 @@
 RootModule = 'AaTurpin.PSConfig.psm1'
 
 # Version number of this module.
-ModuleVersion = '1.0.0'
+ModuleVersion = '1.1.0'
 
 # Supported PSEditions
 # CompatiblePSEditions = @()
@@ -110,7 +110,7 @@ PrivateData = @{
         # IconUri = ''
 
         # ReleaseNotes of this module
-        ReleaseNotes = 'Initial release with JSON configuration management for drive mappings, monitored directories, and staging areas. Includes comprehensive validation, error handling, and integration with AaTurpin.PSLogger for thread-safe logging.'
+        ReleaseNotes = 'Version 1.1.0: Added pre-compiled regex patterns for exclusions providing significant performance improvements for file filtering operations. Enhanced memory management with automatic cleanup. Improved error handling for invalid regex patterns. Maintains full backward compatibility.'
 
     } # End of PSData hashtable
 
