@@ -16,16 +16,22 @@ PowerShell module for managing JSON configuration files with drive mappings, mon
 
 ## Installation
 
-Install from the PowerShell Gallery:
+First, register the NuGet repository if you haven't already:
 
 ```powershell
-Install-Module -Name AaTurpin.PSConfig -Scope CurrentUser
+Register-PSRepository -Name "NuGet" -SourceLocation "https://api.nuget.org/v3/index.json" -PublishLocation "https://www.nuget.org/api/v2/package/" -InstallationPolicy Trusted
+```
+
+Then install the module:
+
+```powershell
+Install-Module -Name AaTurpin.PSConfig -Repository NuGet -Scope CurrentUser
 ```
 
 Or for all users (requires administrator privileges):
 
 ```powershell
-Install-Module -Name AaTurpin.PSConfig -Scope AllUsers
+Install-Module -Name AaTurpin.PSConfig -Repository NuGet -Scope AllUsers
 ```
 
 ## Requirements
