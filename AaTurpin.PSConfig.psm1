@@ -953,5 +953,306 @@ function Test-MonitoredDirectory {
     }
 }
 
+function Show-MultiSelectMenu {
+    <#
+    .SYNOPSIS
+        Displays an interactive multi-select menu in the PowerShell console.
+    
+    .DESCRIPTION
+        Creates a console-based menu where users can navigate with arrow keys,
+        select/deselect items with spacebar, and confirm selections with Enter.
+        Visual feedback shows selected items with [X] and unselected with [ ].
+        Uses default console colors only. Optimized for fast refresh rates.
+    
+    .PARAMETER Title
+        The title to display at the top of the menu.
+    
+    .PARAMETER Options
+        Array of menu options to display.
+    
+    .PARAMETER AllowEmpty
+        Whether to allow confirming with no selections (default: $false).
+    
+    .PARAMETER ShowInstructions
+        Whether to show navigation instructions (default: $true).
+    
+    .EXAMPLE
+        $options = @("Option 1", "Option 2", "Option 3", "Option 4")
+        $selected = Show-MultiSelectMenu -Title "Select Multiple Options" -Options $options
+        Write-Host "You selected: $($selected -join ', ')"
+    
+    .EXAMPLE
+        $services = Get-Service | Select-Object -First 10 -ExpandProperty Name
+        $selectedServices = Show-MultiSelectMenu -Title "Select Services to Restart" -Options $services -AllowEmpty
+    
+    .OUTPUTS
+        Array of selected option strings
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Title,
+        
+        [Parameter(Mandatory = $true)]
+        [string[]]$Options,
+        
+        [Parameter(Mandatory = $false)]
+        [bool]$AllowEmpty = $false,
+        
+        [Parameter(Mandatory = $false)]
+        [bool]$ShowInstructions = $true
+    )
+    
+    # Validate input
+    if ($Options.Count -eq 0) {
+        throw "Options array cannot be empty"
+    }
+    
+    # Initialize state
+    $currentIndex = 0
+    $selectedItems = @()
+    $maxDisplayLength = 70
+    
+    # Check if RawUI ReadKey is available - better detection method
+    $useRawInput = $false
+    try {
+        # Check if we're in a supported host environment
+        $hostName = $Host.Name
+        if ($hostName -eq "ConsoleHost" -or $hostName -eq "Windows PowerShell ISE Host") {
+            # Additional check for RawUI capabilities
+            if ($Host.UI.RawUI -and $Host.UI.RawUI.KeyAvailable -ne $null) {
+                $useRawInput = $true
+            }
+        }
+        # For ISE, we know ReadKey doesn't work properly
+        if ($hostName -eq "Windows PowerShell ISE Host") {
+            $useRawInput = $false
+        }
+    }
+    catch {
+        $useRawInput = $false
+    }
+    
+    if (-not $useRawInput) {
+        Write-Host ""
+        Write-Host "Note: Enhanced keyboard input not available in this environment."
+        Write-Host "Using fallback input method. Use number keys to toggle selections."
+        Write-Host ""
+    }
+    
+    # Function to clear console and redraw menu
+    function Show-Menu {
+        Clear-Host
+
+        # Display title
+        Write-Host ""
+        Write-Host " $Title"
+        Write-Host " $('=' * $Title.Length)"
+        Write-Host ""
+
+        # Display options
+        for ($i = 0; $i -lt $Options.Count; $i++) {
+            $option = $Options[$i]
+            $isSelected = $selectedItems -contains $i
+            $isCurrent = ($i -eq $currentIndex) -and $useRawInput
+
+            # Truncate long options
+            $displayOption = if ($option.Length -gt $maxDisplayLength) {
+                $option.Substring(0, $maxDisplayLength - 3) + "..."
+            } else {
+                $option
+            }
+
+            # Build display components
+            $checkbox = if ($isSelected) { "[X]" } else { "[ ]" }
+            $number = if (-not $useRawInput) { "($($i + 1))" } else { "   " }
+            $prefix = if ($isCurrent) { ">" } else { " " }
+            
+            # Construct the complete line as a single string
+            $line = " $prefix $checkbox $number $displayOption"
+
+            # Display with highlight for current item only (using background color)
+            if ($isCurrent) {
+                # Current item gets inverted colors (background/foreground swap)
+                Write-Host $line -ForegroundColor Black -BackgroundColor White
+            } else {
+                # All other items use default console colors
+                Write-Host $line
+            }
+        }
+
+        # Display instructions
+        if ($ShowInstructions) {
+            Write-Host ""
+            Write-Host " Instructions:"
+            if ($useRawInput) {
+                Write-Host "   Up/Down or k/j  Navigate"
+                Write-Host "   Space           Toggle selection"
+                Write-Host "   Enter           Confirm selection"
+                Write-Host "   Esc or q        Cancel"
+                Write-Host "   a               Select all"
+                Write-Host "   c               Clear all"
+            } else {
+                Write-Host "   1-$($Options.Count)          Toggle item selection"
+                Write-Host "   a               Select all"
+                Write-Host "   c               Clear all"
+                Write-Host "   Enter           Confirm selection"
+                Write-Host "   q               Cancel"
+            }
+        }
+
+        # Display selection status
+        Write-Host ""
+        if ($selectedItems.Count -eq 0) {
+            Write-Host " No items selected"
+            if (-not $AllowEmpty) {
+                Write-Host " (At least one item must be selected)"
+            }
+        } 
+        elseif ($selectedItems.Count -eq 1) {
+            Write-Host " 1 item selected"
+        } 
+        else {
+            Write-Host " $($selectedItems.Count) items selected"
+        }
+
+        # Show command prompt for fallback mode
+        if (-not $useRawInput) {
+            Write-Host ""
+            Write-Host " Commands: [1-$($Options.Count)] Toggle item | [a] Select all | [c] Clear all | [Enter] Confirm | [q] Quit"
+            Write-Host ""
+            Write-Host " Enter command: " -NoNewline
+        }
+    }
+
+    # Main menu loop
+    try {
+        while ($true) {
+            Show-Menu
+            
+            if ($useRawInput) {
+                # Enhanced input method (regular PowerShell console)
+                $key = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+                
+                switch ($key.VirtualKeyCode) {
+                    # Up Arrow or 'k'
+                    { $_ -eq 38 -or ($key.Character -eq 'k') } {
+                        $currentIndex = if ($currentIndex -gt 0) { $currentIndex - 1 } else { $Options.Count - 1 }
+                    }
+                    
+                    # Down Arrow or 'j'
+                    { $_ -eq 40 -or ($key.Character -eq 'j') } {
+                        $currentIndex = if ($currentIndex -lt ($Options.Count - 1)) { $currentIndex + 1 } else { 0 }
+                    }
+                    
+                    # Spacebar - Toggle selection
+                    32 {
+                        if ($selectedItems -contains $currentIndex) {
+                            $selectedItems = $selectedItems | Where-Object { $_ -ne $currentIndex }
+                        } else {
+                            $selectedItems += $currentIndex
+                        }
+                    }
+                    
+                    # Enter - Confirm selection
+                    13 {
+                        if ($AllowEmpty -or $selectedItems.Count -gt 0) {
+                            $result = $selectedItems | Sort-Object | ForEach-Object { $Options[$_] }
+                            Clear-Host
+                            return $result
+                        }
+                    }
+                    
+                    # Escape or 'q' - Cancel
+                    { $_ -eq 27 -or ($key.Character -eq 'q') } {
+                        Clear-Host
+                        Write-Host "Selection cancelled."
+                        return @()
+                    }
+                    
+                    # 'a' - Select all
+                    { $key.Character -eq 'a' } {
+                        $selectedItems = 0..($Options.Count - 1)
+                    }
+                    
+                    # 'c' - Clear all
+                    { $key.Character -eq 'c' } {
+                        $selectedItems = @()
+                    }
+                    
+                    # Home - Go to first item
+                    36 {
+                        $currentIndex = 0
+                    }
+                    
+                    # End - Go to last item
+                    35 {
+                        $currentIndex = $Options.Count - 1
+                    }
+                }
+            }
+            else {
+                # Fallback method for environments without RawUI support
+                $input = Read-Host
+                
+                switch -Regex ($input.Trim().ToLower()) {
+                    '^[0-9]+$' {
+                        $index = [int]$input - 1
+                        if ($index -ge 0 -and $index -lt $Options.Count) {
+                            if ($selectedItems -contains $index) {
+                                $selectedItems = $selectedItems | Where-Object { $_ -ne $index }
+                            } else {
+                                $selectedItems += $index
+                            }
+                            # Menu will refresh immediately on next loop iteration
+                        } else {
+                            Write-Host " Invalid option number. Please enter 1-$($Options.Count)" -ForegroundColor Red
+                            Start-Sleep -Milliseconds 800  # Brief pause only for errors
+                        }
+                    }
+                    
+                    '^a$' {
+                        $selectedItems = 0..($Options.Count - 1)
+                        # Menu will refresh immediately on next loop iteration
+                    }
+                    
+                    '^c$' {
+                        $selectedItems = @()
+                        # Menu will refresh immediately on next loop iteration
+                    }
+                    
+                    '^$' {
+                        # Enter key (empty input)
+                        if ($AllowEmpty -or $selectedItems.Count -gt 0) {
+                            $result = $selectedItems | Sort-Object | ForEach-Object { $Options[$_] }
+                            Clear-Host
+                            return $result
+                        } else {
+                            Write-Host " Please select at least one item" -ForegroundColor Yellow
+                            Start-Sleep -Milliseconds 800  # Brief pause only for errors
+                        }
+                    }
+                    
+                    '^q$' {
+                        Clear-Host
+                        Write-Host "Selection cancelled."
+                        return @()
+                    }
+                    
+                    default {
+                        Write-Host " Invalid command. Use number (1-$($Options.Count)), 'a', 'c', Enter, or 'q'" -ForegroundColor Red
+                        Start-Sleep -Milliseconds 800  # Brief pause only for errors
+                    }
+                }
+            }
+        }
+    }
+    catch {
+        Clear-Host
+        Write-Error "An error occurred: $($_.Exception.Message)"
+        return @()
+    }
+}
+
 # Export all public functions
-Export-ModuleMember -Function Read-SettingsFile, New-SettingsFile, Set-StagingArea, Add-DriveMapping, Remove-DriveMapping, Set-DriveMapping, Add-MonitoredDirectory, Remove-MonitoredDirectory, Set-MonitoredDirectory
+Export-ModuleMember -Function Read-SettingsFile, New-SettingsFile, Set-StagingArea, Add-DriveMapping, Remove-DriveMapping, Set-DriveMapping, Add-MonitoredDirectory, Remove-MonitoredDirectory, Set-MonitoredDirectory, Show-MultiSelectMenu

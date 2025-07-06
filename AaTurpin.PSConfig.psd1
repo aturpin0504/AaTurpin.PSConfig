@@ -12,7 +12,7 @@
 RootModule = 'AaTurpin.PSConfig.psm1'
 
 # Version number of this module.
-ModuleVersion = '1.1.0'
+ModuleVersion = '1.2.0'
 
 # Supported PSEditions
 # CompatiblePSEditions = @()
@@ -30,7 +30,7 @@ CompanyName = 'Unknown'
 Copyright = '(c) 2025 aaturpin. All rights reserved.'
 
 # Description of the functionality provided by this module
-Description = 'PowerShell module for managing JSON configuration files with drive mappings, monitored directories, and staging area settings. Provides thread-safe configuration management with validation and error handling.'
+Description = 'PowerShell module for managing JSON configuration files with drive mappings, monitored directories, and staging area settings. Provides thread-safe configuration management with validation and error handling, plus interactive multi-select menus for user-driven configuration scenarios.'
 
 # Minimum version of the Windows PowerShell engine required by this module
 PowerShellVersion = '5.1'
@@ -76,7 +76,8 @@ RequiredModules = @(
 # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
 FunctionsToExport = 'Read-SettingsFile', 'New-SettingsFile', 'Set-StagingArea', 
                     'Add-DriveMapping', 'Remove-DriveMapping', 'Set-DriveMapping',
-                    'Add-MonitoredDirectory', 'Remove-MonitoredDirectory', 'Set-MonitoredDirectory'
+                    'Add-MonitoredDirectory', 'Remove-MonitoredDirectory', 'Set-MonitoredDirectory',
+                    'Show-MultiSelectMenu'
 
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
 CmdletsToExport = @()
@@ -103,7 +104,7 @@ PrivateData = @{
 
         # Tags applied to this module. These help with module discovery in online galleries.
         Tags = 'Configuration', 'JSON', 'Settings', 'DriveMapping', 'DirectoryMonitoring', 
-               'FileManagement', 'Enterprise', 'Automation', 'Infrastructure'
+               'FileManagement', 'Enterprise', 'Automation', 'Infrastructure', 'Interactive'
 
         # A URL to the license for this module.
         LicenseUri = 'https://github.com/aturpin0504/AaTurpin.PSConfig?tab=MIT-1-ov-file'
@@ -115,7 +116,7 @@ PrivateData = @{
         # IconUri = ''
 
         # ReleaseNotes of this module
-        ReleaseNotes = 'Version 1.1.0: Added pre-compiled regex patterns for exclusions providing significant performance improvements for file filtering operations. Enhanced memory management with automatic cleanup. Improved error handling for invalid regex patterns. Maintains full backward compatibility.'
+        ReleaseNotes = 'Version 1.2.0: Added Show-MultiSelectMenu function for interactive user selection scenarios. Provides console-based multi-select menus with arrow key navigation and fallback input methods. Perfect for configuration management workflows requiring user interaction. Maintains full backward compatibility with all existing functionality.'
 
     } # End of PSData hashtable
 
