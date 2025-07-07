@@ -37,7 +37,7 @@
         [string]$LogPath
     )
     
-    Write-LogInfo -LogPath $LogPath -Message "Reading settings from: $SettingsPath"
+    Write-LogDebug -LogPath $LogPath -Message "Reading settings from: $SettingsPath"
     
     # Memory management: Cleanup compiled patterns on error
     trap {
@@ -159,12 +159,264 @@
         $settings.monitoredDirectories = $validMonitoredDirs
         
         $totalPatterns = ($validMonitoredDirs | ForEach-Object { $_.compiledExclusionPatterns.Count } | Measure-Object -Sum).Sum
-        Write-LogInfo -LogPath $LogPath -Message "Configuration loaded: $($validDriveMappings.Count) drive mappings, $($validMonitoredDirs.Count) monitored directories, $totalPatterns total compiled exclusion patterns"
+        Write-LogDebug -LogPath $LogPath -Message "Configuration loaded: $($validDriveMappings.Count) drive mappings, $($validMonitoredDirs.Count) monitored directories, $totalPatterns total compiled exclusion patterns"
         
         return $settings
     }
     catch {
         Write-LogError -LogPath $LogPath -Message "Failed to read settings file" -Exception $_.Exception
+        throw
+    }
+}
+
+function Show-Settings {
+    <#
+    .SYNOPSIS
+        Displays configuration settings with detailed information and current system status.
+    
+    .DESCRIPTION
+        This cmdlet reads the settings.json file and displays a comprehensive summary
+        of the current configuration including staging area, drive mappings, and monitored
+        directories. It shows both the configured values and their current system status,
+        providing administrators with a complete view of the configuration state.
+    
+    .PARAMETER SettingsPath
+        The path to the settings.json file. Defaults to "settings.json" in current directory.
+    
+    .PARAMETER LogPath
+        The path to the log file where operations will be logged using PSLogger.
+    
+    .PARAMETER ShowDetails
+        If specified, displays detailed information including exclusion patterns and system status.
+    
+    .EXAMPLE
+        Show-Settings -SettingsPath "C:\Config\settings.json" -LogPath "C:\Logs\app.log"
+        
+        Displays basic configuration summary.
+    
+    .EXAMPLE
+        Show-Settings -SettingsPath "settings.json" -LogPath "app.log" -ShowDetails
+        
+        Displays detailed configuration information including exclusions and system status.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $false)]
+        [string]$SettingsPath = "settings.json",
+        
+        [Parameter(Mandatory = $true)]
+        [string]$LogPath,
+        
+        [Parameter(Mandatory = $false)]
+        [switch]$ShowDetails
+    )
+    
+    Write-Host "`nConfiguration Report" -ForegroundColor Cyan
+    Write-Host "=" * 50 -ForegroundColor Cyan
+    Write-LogInfo -LogPath $LogPath -Message "Generating configuration report for: $SettingsPath"
+ 
+    try {
+        $settings = Read-SettingsFile -SettingsPath $SettingsPath -LogPath $LogPath
+        
+        # Configuration file information
+        Write-Host "`nConfiguration File:" -ForegroundColor Yellow
+        $absolutePath = Resolve-Path $SettingsPath -ErrorAction SilentlyContinue
+        if ($absolutePath) {
+            Write-Host "  Location: $($absolutePath.Path)" -ForegroundColor White
+            $fileInfo = Get-Item $absolutePath.Path
+            Write-Host "  Last Modified: $($fileInfo.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor White
+            Write-Host "  Size: $([math]::Round($fileInfo.Length / 1KB, 2)) KB" -ForegroundColor White
+        } else {
+            Write-Host "  Location: $SettingsPath (not found)" -ForegroundColor Red
+        }
+        
+        # Staging area information - FIX: Remove duplication
+        Write-Host "`nStaging Area:" -ForegroundColor Yellow
+        Write-Host "  Path: $($settings.stagingArea)" -ForegroundColor White
+        $stagingExists = Test-Path $settings.stagingArea
+        $stagingStatus = if ($stagingExists) { "✓ Exists" } else { "✗ Not Found" }
+        $stagingColor = if ($stagingExists) { "Green" } else { "Red" }
+        Write-Host "  Status: $stagingStatus" -ForegroundColor $stagingColor
+        
+        if ($stagingExists -and $ShowDetails) {
+            try {
+                $stagingInfo = Get-Item $settings.stagingArea
+                Write-Host "  Created: $($stagingInfo.CreationTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Gray
+                
+                # Use .NET DirectoryInfo for efficient file counting
+                $dirInfo = [System.IO.DirectoryInfo]::new($settings.stagingArea)
+                $fileCount = 0
+                $dirCount = 0
+                
+                try {
+                    # Count files and directories efficiently
+                    $files = $dirInfo.GetFiles("*", [System.IO.SearchOption]::AllDirectories)
+                    $directories = $dirInfo.GetDirectories("*", [System.IO.SearchOption]::AllDirectories)
+                    $fileCount = $files.Count
+                    $dirCount = $directories.Count
+                    
+                    $totalItems = $fileCount + $dirCount
+                    Write-Host "  Contents: $totalItems items ($fileCount files, $dirCount directories)" -ForegroundColor Gray
+                    
+                    # Optionally show size information for files
+                    if ($fileCount -gt 0) {
+                        $totalSize = ($files | Measure-Object -Property Length -Sum).Sum
+                        $formattedSize = if ($totalSize -ge 1GB) { 
+                            "$([math]::Round($totalSize / 1GB, 2)) GB" 
+                        } elseif ($totalSize -ge 1MB) { 
+                            "$([math]::Round($totalSize / 1MB, 2)) MB" 
+                        } elseif ($totalSize -ge 1KB) { 
+                            "$([math]::Round($totalSize / 1KB, 2)) KB" 
+                        } else { 
+                            "$totalSize bytes" 
+                        }
+                        Write-Host "  Total Size: $formattedSize" -ForegroundColor Gray
+                    }
+                }
+                catch {
+                    Write-Host "  Contents: Unable to enumerate items" -ForegroundColor Yellow
+                }
+            }
+            catch {
+                Write-Host "  Additional info: Unable to access" -ForegroundColor Yellow
+            }
+        }
+        
+        # Drive mappings information
+        $displayableMappings = $settings.driveMappings | Where-Object { $_ -ne $null }
+        Write-Host "`nDrive Mappings: $($displayableMappings.Count)" -ForegroundColor Yellow
+        if ($displayableMappings.Count -eq 0) {
+            Write-Host "  No drive mappings configured" -ForegroundColor Gray
+        } else {
+            foreach ($mapping in $displayableMappings) {
+                $driveExists = Test-Path "$($mapping.letter):\"
+                $driveStatus = if ($driveExists) { "✓ Mapped" } else { "✗ Not Mapped" }
+                $driveColor = if ($driveExists) { "Green" } else { "Red" }
+                
+                Write-Host "  $($mapping.letter): -> $($mapping.path)" -ForegroundColor White
+                Write-Host "    Status: $driveStatus" -ForegroundColor $driveColor
+                
+                if ($ShowDetails) {
+                    if ($driveExists) {
+                        try {
+                            $currentMapping = Get-PSDrive -Name $mapping.letter -ErrorAction SilentlyContinue
+                            if ($currentMapping -and $currentMapping.DisplayRoot) {
+                                $actualPath = $currentMapping.DisplayRoot
+                                $pathMatch = ($actualPath -eq $mapping.path)
+                                $pathStatus = if ($pathMatch) { "✓ Correct Path" } else { "⚠ Different Path: $actualPath" }
+                                $pathColor = if ($pathMatch) { "Green" } else { "Yellow" }
+                                Write-Host "    Path Check: $pathStatus" -ForegroundColor $pathColor
+                            }
+                        }
+                        catch {
+                            Write-Host "    Path Check: Unable to verify" -ForegroundColor Yellow
+                        }
+                    }
+                    
+                    # Test network path accessibility
+                    try {
+                        $pathAccessible = Test-Path $mapping.path -ErrorAction SilentlyContinue
+                        $accessStatus = if ($pathAccessible) { "✓ Accessible" } else { "✗ Not Accessible" }
+                        $accessColor = if ($pathAccessible) { "Green" } else { "Red" }
+                        Write-Host "    Network Path: $accessStatus" -ForegroundColor $accessColor
+                    }
+                    catch {
+                        Write-Host "    Network Path: Unable to test" -ForegroundColor Yellow
+                    }
+                }
+            }
+        }
+        
+        # Monitored directories information
+        Write-Host "`nMonitored Directories: $($settings.monitoredDirectories.Count)" -ForegroundColor Yellow
+        if ($settings.monitoredDirectories.Count -eq 0) {
+            Write-Host "  No monitored directories configured" -ForegroundColor Gray
+        } else {
+            $totalExclusions = ($settings.monitoredDirectories | ForEach-Object { $_.exclusions.Count } | Measure-Object -Sum).Sum
+            $totalCompiledPatterns = ($settings.monitoredDirectories | ForEach-Object { $_.compiledExclusionPatterns.Count } | Measure-Object -Sum).Sum
+            
+            Write-Host "  Total Exclusion Patterns: $totalExclusions (compiled: $totalCompiledPatterns)" -ForegroundColor Gray
+            Write-Host ""
+            
+            foreach ($directory in $settings.monitoredDirectories) {
+                $exclusionCount = if ($directory.exclusions) { $directory.exclusions.Count } else { 0 }
+                $compiledCount = if ($directory.compiledExclusionPatterns) { $directory.compiledExclusionPatterns.Count } else { 0 }
+                
+                Write-Host "  $($directory.path)" -ForegroundColor White
+                Write-Host "    Exclusions: $exclusionCount patterns ($compiledCount compiled)" -ForegroundColor Gray
+                
+                if ($ShowDetails) {
+                    # Test directory accessibility
+                    try {
+                        $dirAccessible = Test-Path $directory.path -ErrorAction SilentlyContinue
+                        $dirStatus = if ($dirAccessible) { "✓ Accessible" } else { "✗ Not Accessible" }
+                        $dirColor = if ($dirAccessible) { "Green" } else { "Red" }
+                        Write-Host "    Status: $dirStatus" -ForegroundColor $dirColor
+                        
+                        # Show exclusion patterns if any
+                        if ($exclusionCount -gt 0 -and $directory.exclusions) {
+                            Write-Host "    Exclusion Patterns:" -ForegroundColor Gray
+                            foreach ($exclusion in $directory.exclusions) {
+                                Write-Host "      - $exclusion" -ForegroundColor DarkGray
+                            }
+                        }
+                        
+                        # Show compilation status
+                        if ($exclusionCount -ne $compiledCount) {
+                            Write-Host "    Warning: $($exclusionCount - $compiledCount) patterns failed to compile" -ForegroundColor Yellow
+                        }
+                    }
+                    catch {
+                        Write-Host "    Status: Unable to test" -ForegroundColor Yellow
+                    }
+                }
+            }
+        }
+        
+        # Summary statistics
+        Write-Host "`nSummary:" -ForegroundColor Yellow
+        Write-Host "  Configuration Status: Valid" -ForegroundColor Green
+        
+        if ($ShowDetails) {
+            # Fix: Ensure we get proper counts for accessible items
+            $accessibleDrives = @($displayableMappings | Where-Object { 
+                Test-Path "$($_.letter):\" -ErrorAction SilentlyContinue 
+            })
+    
+            $accessibleDirs = @($settings.monitoredDirectories | Where-Object { 
+                Test-Path $_.path -ErrorAction SilentlyContinue 
+            })
+            
+            $driveAccessibleCount = $accessibleDrives.Count
+            $dirAccessibleCount = $accessibleDirs.Count
+            $totalMappings = $displayableMappings.Count
+            $totalDirs = $settings.monitoredDirectories.Count
+    
+            Write-Host "  Drive Mappings: $driveAccessibleCount/$totalMappings accessible" -ForegroundColor $(if ($driveAccessibleCount -eq $totalMappings) { "Green" } else { "Yellow" })
+            Write-Host "  Monitored Directories: $dirAccessibleCount/$totalDirs accessible" -ForegroundColor $(if ($dirAccessibleCount -eq $totalDirs) { "Green" } else { "Yellow" })
+    
+            # Fix regex pattern counting with safe arithmetic
+            $totalExclusions = 0
+            $totalCompiledPatterns = 0
+    
+            foreach ($dir in $settings.monitoredDirectories) {
+                if ($dir.exclusions) {
+                    $totalExclusions += $dir.exclusions.Count
+                }
+                if ($dir.compiledExclusionPatterns) {
+                    $totalCompiledPatterns += $dir.compiledExclusionPatterns.Count
+                }
+            }
+    
+            Write-Host "  Regex Patterns: $totalCompiledPatterns/$totalExclusions compiled successfully" -ForegroundColor $(if ($totalCompiledPatterns -eq $totalExclusions) { "Green" } else { "Yellow" })
+        }
+        
+        Write-Host "`nConfiguration report completed." -ForegroundColor Green
+        Write-LogInfo -LogPath $LogPath -Message "Configuration report completed successfully - $($settings.driveMappings.Count) drive mappings, $($settings.monitoredDirectories.Count) monitored directories"
+    }
+    catch {
+        Write-LogError -LogPath $LogPath -Message "Failed to generate configuration report" -Exception $_.Exception
+        Write-Host "`nError generating configuration report: $($_.Exception.Message)" -ForegroundColor Red
         throw
     }
 }
@@ -851,19 +1103,6 @@ function Save-SettingsFile {
 }
 
 function Test-DriveMapping {
-    <#
-    .SYNOPSIS
-        Validates a drive mapping object.
-    
-    .PARAMETER Mapping
-        The drive mapping object to validate.
-    
-    .PARAMETER LogPath
-        Path to log file for validation messages.
-    
-    .OUTPUTS
-        Boolean indicating if the mapping is valid.
-    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -889,11 +1128,18 @@ function Test-DriveMapping {
             return $false
         }
         
-        # Validate UNC path format
-        if ([string]::IsNullOrWhiteSpace($Mapping.path) -or 
-            -not $Mapping.path.StartsWith("\\") -or 
-            $Mapping.path.Length -le 2) {
-            Write-LogWarning -LogPath $LogPath -Message "Invalid UNC path for drive $($Mapping.letter): '$($Mapping.path)'"
+        # Validate path format - allow both UNC paths and local drive paths
+        if ([string]::IsNullOrWhiteSpace($Mapping.path) -or $Mapping.path.Length -le 2) {
+            Write-LogWarning -LogPath $LogPath -Message "Invalid path for drive $($Mapping.letter): '$($Mapping.path)'"
+            return $false
+        }
+        
+        # Check if it's a UNC path or local drive path
+        $isUncPath = $Mapping.path.StartsWith("\\")
+        $isLocalDrivePath = $Mapping.path -match "^[A-Za-z]:\\.*"
+        
+        if (-not $isUncPath -and -not $isLocalDrivePath) {
+            Write-LogWarning -LogPath $LogPath -Message "Invalid path format for drive $($Mapping.letter): '$($Mapping.path)' (must be UNC path or local drive path)"
             return $false
         }
         
@@ -1254,5 +1500,657 @@ function Show-MultiSelectMenu {
     }
 }
 
+function Add-DriveMappingInteractive {
+    <#
+    .SYNOPSIS
+        Interactively adds a new drive mapping to the configuration file.
+    
+    .DESCRIPTION
+        This cmdlet provides an interactive interface for adding a new drive mapping.
+        It prompts the user for the drive letter and UNC path, validates the input,
+        and adds the mapping to the settings.json file after user confirmation.
+    
+    .PARAMETER SettingsPath
+        The path to the settings.json file. Defaults to "settings.json" in current directory.
+    
+    .PARAMETER LogPath
+        The path to the log file where operations will be logged using PSLogger.
+    
+    .EXAMPLE
+        $settings = Add-DriveMappingInteractive -LogPath "C:\Logs\app.log"
+        Interactively prompts for drive mapping details and adds it to the default settings file.
+    
+    .EXAMPLE
+        $config = Add-DriveMappingInteractive -SettingsPath "C:\Config\settings.json" -LogPath "C:\Logs\app.log"
+        Adds a drive mapping to the specified settings file using interactive prompts.
+    
+    .OUTPUTS
+        PSCustomObject containing the updated settings configuration, or $null if operation was cancelled.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory = $false)]
+        [ValidateNotNullOrEmpty()]
+        [string]$SettingsPath = "settings.json",
+        
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$LogPath
+    )
+    
+    Write-LogInfo -LogPath $LogPath -Message "Starting interactive drive mapping addition"
+    
+    Write-Host "`nAdd New Drive Mapping" -ForegroundColor Yellow
+    Write-Host "=" * 25 -ForegroundColor Yellow
+    
+    try {
+        # Get drive letter with validation
+        do {
+            $driveLetter = Read-Host "Enter drive letter (A-Z)"
+            if ([string]::IsNullOrWhiteSpace($driveLetter) -or $driveLetter.Length -ne 1 -or -not [char]::IsLetter($driveLetter)) {
+                Write-Host "Please enter a single alphabetic character" -ForegroundColor Red
+                Write-LogWarning -LogPath $LogPath -Message "Invalid drive letter entered: '$driveLetter'"
+                $driveLetter = $null
+            }
+        } while (-not $driveLetter)
+        
+        # Get UNC path with validation
+        do {
+            $uncPath = Read-Host "Enter UNC path (e.g., \\server\share)"
+            if ([string]::IsNullOrWhiteSpace($uncPath) -or -not $uncPath.StartsWith("\\") -or $uncPath.Length -le 2) {
+                Write-Host "Please enter a valid UNC path starting with \\" -ForegroundColor Red
+                Write-LogWarning -LogPath $LogPath -Message "Invalid UNC path entered: '$uncPath'"
+                $uncPath = $null
+            }
+        } while (-not $uncPath)
+        
+        # Confirm and add
+        Write-Host "`nAdding drive mapping: $($driveLetter.ToUpper()) -> $uncPath" -ForegroundColor Green
+        $confirm = Read-Host "Confirm? [Y/N]"
+        
+        if ($confirm -match '^[Yy]') {
+            if ($PSCmdlet.ShouldProcess("Drive mapping '$($driveLetter.ToUpper())'", "Add mapping to '$uncPath'")) {
+                $updatedSettings = Add-DriveMapping -Letter $driveLetter -Path $uncPath -SettingsPath $SettingsPath -LogPath $LogPath
+                Write-Host "Drive mapping added successfully!" -ForegroundColor Green
+                Write-LogInfo -LogPath $LogPath -Message "Interactive drive mapping addition completed successfully: $($driveLetter.ToUpper()) -> $uncPath"
+                
+                Read-Host "`nPress Enter to continue"
+                return $updatedSettings
+            }
+        } else {
+            Write-Host "Operation cancelled." -ForegroundColor Yellow
+            Write-LogInfo -LogPath $LogPath -Message "Interactive drive mapping addition cancelled by user"
+            
+            Read-Host "`nPress Enter to continue"
+            return $null
+        }
+    }
+    catch {
+        Write-LogError -LogPath $LogPath -Message "Failed to add drive mapping interactively" -Exception $_.Exception
+        Write-Host "Error adding drive mapping: $($_.Exception.Message)" -ForegroundColor Red
+        
+        Read-Host "`nPress Enter to continue"
+        throw
+    }
+}
+
+function Remove-DriveMappingInteractive {
+    <#
+    .SYNOPSIS
+        Interactively removes a drive mapping from the configuration file.
+    
+    .DESCRIPTION
+        This cmdlet provides an interactive interface for removing an existing drive mapping.
+        It displays available mappings for selection and removes the chosen mapping
+        after user confirmation.
+    
+    .PARAMETER SettingsPath
+        The path to the settings.json file. Defaults to "settings.json" in current directory.
+    
+    .PARAMETER LogPath
+        The path to the log file where operations will be logged using PSLogger.
+    
+    .EXAMPLE
+        $settings = Remove-DriveMappingInteractive -LogPath "C:\Logs\app.log"
+        Interactively removes a drive mapping from the default settings file.
+    
+    .EXAMPLE
+        $config = Remove-DriveMappingInteractive -SettingsPath "C:\Config\settings.json" -LogPath "C:\Logs\app.log"
+        Removes a drive mapping from the specified settings file using interactive selection.
+    
+    .OUTPUTS
+        PSCustomObject containing the updated settings configuration, or $null if operation was cancelled or no mappings exist.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory = $false)]
+        [ValidateNotNullOrEmpty()]
+        [string]$SettingsPath = "settings.json",
+        
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$LogPath
+    )
+    
+    Write-LogInfo -LogPath $LogPath -Message "Starting interactive drive mapping removal"
+    
+    Write-Host "`nRemove Drive Mapping" -ForegroundColor Yellow
+    Write-Host "=" * 20 -ForegroundColor Yellow
+    
+    try {
+        $settings = Read-SettingsFile -SettingsPath $SettingsPath -LogPath $LogPath
+        
+        if ($settings.driveMappings.Count -eq 0) {
+            Write-Host "No drive mappings configured to remove." -ForegroundColor Yellow
+            Write-LogInfo -LogPath $LogPath -Message "No drive mappings available for removal"
+            
+            Read-Host "Press Enter to continue"
+            return $null
+        }
+        
+        # Create options for selection
+        $mappingOptions = $settings.driveMappings | ForEach-Object { "$($_.letter): -> $($_.path)" }
+        
+        $selection = Show-MultiSelectMenu -Title "Select drive mapping to remove" -Options $mappingOptions -AllowEmpty $true
+        
+        if ($selection.Count -eq 0) {
+            Write-Host "No selection made. Operation cancelled." -ForegroundColor Yellow
+            Write-LogInfo -LogPath $LogPath -Message "Interactive drive mapping removal cancelled - no selection made"
+            return $null
+        }
+        
+        # Extract drive letter from selection
+        $selectedMapping = $selection[0]
+        $driveLetter = $selectedMapping.Split(':')[0]
+        
+        # Confirm removal
+        Write-Host "`nRemoving drive mapping: $selectedMapping" -ForegroundColor Red
+        $confirm = Read-Host "Are you sure? [Y/N]"
+        
+        if ($confirm -match '^[Yy]') {
+            if ($PSCmdlet.ShouldProcess("Drive mapping '$driveLetter'", "Remove mapping")) {
+                $updatedSettings = Remove-DriveMapping -Letter $driveLetter -SettingsPath $SettingsPath -LogPath $LogPath
+                Write-Host "Drive mapping removed successfully!" -ForegroundColor Green
+                Write-LogInfo -LogPath $LogPath -Message "Interactive drive mapping removal completed successfully: $selectedMapping"
+                
+                Read-Host "`nPress Enter to continue"
+                return $updatedSettings
+            }
+        } else {
+            Write-Host "Operation cancelled." -ForegroundColor Yellow
+            Write-LogInfo -LogPath $LogPath -Message "Interactive drive mapping removal cancelled by user"
+            
+            Read-Host "`nPress Enter to continue"
+            return $null
+        }
+    }
+    catch {
+        Write-LogError -LogPath $LogPath -Message "Failed to remove drive mapping interactively" -Exception $_.Exception
+        Write-Host "Error removing drive mapping: $($_.Exception.Message)" -ForegroundColor Red
+        
+        Read-Host "`nPress Enter to continue"
+        throw
+    }
+}
+
+function Set-DriveMappingInteractive {
+    <#
+    .SYNOPSIS
+        Interactively modifies an existing drive mapping in the configuration file.
+    
+    .DESCRIPTION
+        This cmdlet provides an interactive interface for modifying an existing drive mapping.
+        It displays available mappings for selection and prompts for a new UNC path,
+        updating the mapping after user confirmation.
+    
+    .PARAMETER SettingsPath
+        The path to the settings.json file. Defaults to "settings.json" in current directory.
+    
+    .PARAMETER LogPath
+        The path to the log file where operations will be logged using PSLogger.
+    
+    .EXAMPLE
+        $settings = Set-DriveMappingInteractive -LogPath "C:\Logs\app.log"
+        Interactively modifies a drive mapping in the default settings file.
+    
+    .EXAMPLE
+        $config = Set-DriveMappingInteractive -SettingsPath "C:\Config\settings.json" -LogPath "C:\Logs\app.log"
+        Modifies a drive mapping in the specified settings file using interactive prompts.
+    
+    .OUTPUTS
+        PSCustomObject containing the updated settings configuration, or $null if operation was cancelled or no mappings exist.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory = $false)]
+        [ValidateNotNullOrEmpty()]
+        [string]$SettingsPath = "settings.json",
+        
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$LogPath
+    )
+    
+    Write-LogInfo -LogPath $LogPath -Message "Starting interactive drive mapping modification"
+    
+    Write-Host "`nModify Drive Mapping" -ForegroundColor Yellow
+    Write-Host "=" * 20 -ForegroundColor Yellow
+    
+    try {
+        $settings = Read-SettingsFile -SettingsPath $SettingsPath -LogPath $LogPath
+        
+        if ($settings.driveMappings.Count -eq 0) {
+            Write-Host "No drive mappings configured to modify." -ForegroundColor Yellow
+            Write-LogInfo -LogPath $LogPath -Message "No drive mappings available for modification"
+            
+            Read-Host "Press Enter to continue"
+            return $null
+        }
+        
+        # Create options for selection
+        $mappingOptions = $settings.driveMappings | ForEach-Object { "$($_.letter): -> $($_.path)" }
+        
+        $selection = Show-MultiSelectMenu -Title "Select drive mapping to modify" -Options $mappingOptions -AllowEmpty $true
+        
+        if ($selection.Count -eq 0) {
+            Write-Host "No selection made. Operation cancelled." -ForegroundColor Yellow
+            Write-LogInfo -LogPath $LogPath -Message "Interactive drive mapping modification cancelled - no selection made"
+            return $null
+        }
+        
+        # Extract drive letter from selection
+        $selectedMapping = $selection[0]
+        $driveLetter = $selectedMapping.Split(':')[0]
+        $currentPath = ($settings.driveMappings | Where-Object { $_.letter -eq $driveLetter }).path
+        
+        Write-Host "`nCurrent path for drive $driveLetter`: $currentPath" -ForegroundColor Cyan
+        
+        # Get new UNC path with validation
+        do {
+            $newUncPath = Read-Host "Enter new UNC path (e.g., \\server\share)"
+            if ([string]::IsNullOrWhiteSpace($newUncPath) -or -not $newUncPath.StartsWith("\\") -or $newUncPath.Length -le 2) {
+                Write-Host "Please enter a valid UNC path starting with \\" -ForegroundColor Red
+                Write-LogWarning -LogPath $LogPath -Message "Invalid UNC path entered: '$newUncPath'"
+                $newUncPath = $null
+            }
+        } while (-not $newUncPath)
+        
+        # Confirm modification
+        Write-Host "`nModifying drive mapping: $driveLetter" -ForegroundColor Green
+        Write-Host "  From: $currentPath" -ForegroundColor Gray
+        Write-Host "  To:   $newUncPath" -ForegroundColor Gray
+        $confirm = Read-Host "Confirm? [Y/N]"
+        
+        if ($confirm -match '^[Yy]') {
+            if ($PSCmdlet.ShouldProcess("Drive mapping '$driveLetter'", "Update path from '$currentPath' to '$newUncPath'")) {
+                $updatedSettings = Set-DriveMapping -Letter $driveLetter -Path $newUncPath -SettingsPath $SettingsPath -LogPath $LogPath
+                Write-Host "Drive mapping modified successfully!" -ForegroundColor Green
+                Write-LogInfo -LogPath $LogPath -Message "Interactive drive mapping modification completed successfully: $driveLetter from '$currentPath' to '$newUncPath'"
+                
+                Read-Host "`nPress Enter to continue"
+                return $updatedSettings
+            }
+        } else {
+            Write-Host "Operation cancelled." -ForegroundColor Yellow
+            Write-LogInfo -LogPath $LogPath -Message "Interactive drive mapping modification cancelled by user"
+            
+            Read-Host "`nPress Enter to continue"
+            return $null
+        }
+    }
+    catch {
+        Write-LogError -LogPath $LogPath -Message "Failed to modify drive mapping interactively" -Exception $_.Exception
+        Write-Host "Error modifying drive mapping: $($_.Exception.Message)" -ForegroundColor Red
+        
+        Read-Host "`nPress Enter to continue"
+        throw
+    }
+}
+
+function Add-MonitoredDirectoryInteractive {
+    <#
+    .SYNOPSIS
+        Interactively adds a new monitored directory to the configuration file.
+    
+    .DESCRIPTION
+        This cmdlet provides an interactive interface for adding a new monitored directory.
+        It prompts the user for the directory path and optional exclusion patterns,
+        validates the input, and adds the directory to the settings.json file after user confirmation.
+    
+    .PARAMETER SettingsPath
+        The path to the settings.json file. Defaults to "settings.json" in current directory.
+    
+    .PARAMETER LogPath
+        The path to the log file where operations will be logged using PSLogger.
+    
+    .EXAMPLE
+        $settings = Add-MonitoredDirectoryInteractive -LogPath "C:\Logs\app.log"
+        Interactively prompts for monitored directory details and adds it to the default settings file.
+    
+    .EXAMPLE
+        $config = Add-MonitoredDirectoryInteractive -SettingsPath "C:\Config\settings.json" -LogPath "C:\Logs\app.log"
+        Adds a monitored directory to the specified settings file using interactive prompts.
+    
+    .OUTPUTS
+        PSCustomObject containing the updated settings configuration, or $null if operation was cancelled.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory = $false)]
+        [ValidateNotNullOrEmpty()]
+        [string]$SettingsPath = "settings.json",
+        
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$LogPath
+    )
+    
+    Write-LogInfo -LogPath $LogPath -Message "Starting interactive monitored directory addition"
+    
+    Write-Host "`nAdd New Monitored Directory" -ForegroundColor Yellow
+    Write-Host "=" * 30 -ForegroundColor Yellow
+    
+    try {
+        # Get directory path with validation
+        do {
+            $directoryPath = Read-Host "Enter directory path to monitor"
+            if ([string]::IsNullOrWhiteSpace($directoryPath)) {
+                Write-Host "Please enter a valid directory path" -ForegroundColor Red
+                Write-LogWarning -LogPath $LogPath -Message "Invalid directory path entered: '$directoryPath'"
+                $directoryPath = $null
+            }
+        } while (-not $directoryPath)
+        
+        # Get exclusions
+        Write-Host "`nEnter exclusion patterns (subdirectory names to exclude):" -ForegroundColor Cyan
+        Write-Host "Leave blank and press Enter when done" -ForegroundColor Gray
+        
+        $exclusions = @()
+        $exclusionIndex = 1
+        
+        while ($true) {
+            $exclusion = Read-Host "Exclusion $exclusionIndex (or Enter to finish)"
+            if ([string]::IsNullOrWhiteSpace($exclusion)) {
+                break
+            }
+            $exclusions += $exclusion.Trim()
+            $exclusionIndex++
+        }
+        
+        Write-LogDebug -LogPath $LogPath -Message "Collected exclusions for '$directoryPath': $($exclusions.Count) items"
+        
+        # Confirm and add
+        Write-Host "`nAdding monitored directory:" -ForegroundColor Green
+        Write-Host "  Path: $directoryPath" -ForegroundColor White
+        Write-Host "  Exclusions: $($exclusions.Count) items" -ForegroundColor White
+        if ($exclusions.Count -gt 0) {
+            $exclusions | ForEach-Object { Write-Host "    - $_" -ForegroundColor Gray }
+        }
+        
+        $confirm = Read-Host "Confirm? [Y/N]"
+        
+        if ($confirm -match '^[Yy]') {
+            if ($PSCmdlet.ShouldProcess("Monitored directory '$directoryPath'", "Add with $($exclusions.Count) exclusions")) {
+                $updatedSettings = Add-MonitoredDirectory -Path $directoryPath -Exclusions $exclusions -SettingsPath $SettingsPath -LogPath $LogPath
+                Write-Host "Monitored directory added successfully!" -ForegroundColor Green
+                Write-LogInfo -LogPath $LogPath -Message "Interactive monitored directory addition completed successfully: '$directoryPath' with $($exclusions.Count) exclusions"
+                
+                Read-Host "`nPress Enter to continue"
+                return $updatedSettings
+            }
+        } else {
+            Write-Host "Operation cancelled." -ForegroundColor Yellow
+            Write-LogInfo -LogPath $LogPath -Message "Interactive monitored directory addition cancelled by user"
+            
+            Read-Host "`nPress Enter to continue"
+            return $null
+        }
+    }
+    catch {
+        Write-LogError -LogPath $LogPath -Message "Failed to add monitored directory interactively" -Exception $_.Exception
+        Write-Host "Error adding monitored directory: $($_.Exception.Message)" -ForegroundColor Red
+        
+        Read-Host "`nPress Enter to continue"
+        throw
+    }
+}
+
+function Remove-MonitoredDirectoryInteractive {
+    <#
+    .SYNOPSIS
+        Interactively removes a monitored directory from the configuration file.
+    
+    .DESCRIPTION
+        This cmdlet provides an interactive interface for removing an existing monitored directory.
+        It displays available directories for selection and removes the chosen directory
+        after user confirmation.
+    
+    .PARAMETER SettingsPath
+        The path to the settings.json file. Defaults to "settings.json" in current directory.
+    
+    .PARAMETER LogPath
+        The path to the log file where operations will be logged using PSLogger.
+    
+    .EXAMPLE
+        $settings = Remove-MonitoredDirectoryInteractive -LogPath "C:\Logs\app.log"
+        Interactively removes a monitored directory from the default settings file.
+    
+    .EXAMPLE
+        $config = Remove-MonitoredDirectoryInteractive -SettingsPath "C:\Config\settings.json" -LogPath "C:\Logs\app.log"
+        Removes a monitored directory from the specified settings file using interactive selection.
+    
+    .OUTPUTS
+        PSCustomObject containing the updated settings configuration, or $null if operation was cancelled or no directories exist.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory = $false)]
+        [ValidateNotNullOrEmpty()]
+        [string]$SettingsPath = "settings.json",
+        
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$LogPath
+    )
+    
+    Write-LogInfo -LogPath $LogPath -Message "Starting interactive monitored directory removal"
+    
+    Write-Host "`nRemove Monitored Directory" -ForegroundColor Yellow
+    Write-Host "=" * 28 -ForegroundColor Yellow
+    
+    try {
+        $settings = Read-SettingsFile -SettingsPath $SettingsPath -LogPath $LogPath
+        
+        if ($settings.monitoredDirectories.Count -eq 0) {
+            Write-Host "No monitored directories configured to remove." -ForegroundColor Yellow
+            Write-LogInfo -LogPath $LogPath -Message "No monitored directories available for removal"
+            
+            Read-Host "Press Enter to continue"
+            return $null
+        }
+        
+        # Create options for selection
+        $directoryOptions = $settings.monitoredDirectories | ForEach-Object { 
+            $exclusionCount = if ($_.exclusions) { $_.exclusions.Count } else { 0 }
+            "$($_.path) ($exclusionCount exclusions)"
+        }
+        
+        $selection = Show-MultiSelectMenu -Title "Select monitored directory to remove" -Options $directoryOptions -AllowEmpty $true
+        
+        if ($selection.Count -eq 0) {
+            Write-Host "No selection made. Operation cancelled." -ForegroundColor Yellow
+            Write-LogInfo -LogPath $LogPath -Message "Interactive monitored directory removal cancelled - no selection made"
+            return $null
+        }
+        
+        # Extract path from selection
+        $selectedDirectory = $selection[0]
+        $directoryPath = $selectedDirectory -replace ' \(\d+ exclusions\)$', ''
+        
+        # Confirm removal
+        Write-Host "`nRemoving monitored directory: $directoryPath" -ForegroundColor Red
+        $confirm = Read-Host "Are you sure? [Y/N]"
+        
+        if ($confirm -match '^[Yy]') {
+            if ($PSCmdlet.ShouldProcess("Monitored directory '$directoryPath'", "Remove directory")) {
+                $updatedSettings = Remove-MonitoredDirectory -Path $directoryPath -SettingsPath $SettingsPath -LogPath $LogPath
+                Write-Host "Monitored directory removed successfully!" -ForegroundColor Green
+                Write-LogInfo -LogPath $LogPath -Message "Interactive monitored directory removal completed successfully: '$directoryPath'"
+                
+                Read-Host "`nPress Enter to continue"
+                return $updatedSettings
+            }
+        } else {
+            Write-Host "Operation cancelled." -ForegroundColor Yellow
+            Write-LogInfo -LogPath $LogPath -Message "Interactive monitored directory removal cancelled by user"
+            
+            Read-Host "`nPress Enter to continue"
+            return $null
+        }
+    }
+    catch {
+        Write-LogError -LogPath $LogPath -Message "Failed to remove monitored directory interactively" -Exception $_.Exception
+        Write-Host "Error removing monitored directory: $($_.Exception.Message)" -ForegroundColor Red
+        
+        Read-Host "`nPress Enter to continue"
+        throw
+    }
+}
+
+function Set-MonitoredDirectoryInteractive {
+    <#
+    .SYNOPSIS
+        Interactively modifies an existing monitored directory in the configuration file.
+    
+    .DESCRIPTION
+        This cmdlet provides an interactive interface for modifying an existing monitored directory.
+        It displays available directories for selection and prompts for new exclusion patterns,
+        updating the directory configuration after user confirmation.
+    
+    .PARAMETER SettingsPath
+        The path to the settings.json file. Defaults to "settings.json" in current directory.
+    
+    .PARAMETER LogPath
+        The path to the log file where operations will be logged using PSLogger.
+    
+    .EXAMPLE
+        $settings = Set-MonitoredDirectoryInteractive -LogPath "C:\Logs\app.log"
+        Interactively modifies a monitored directory in the default settings file.
+    
+    .EXAMPLE
+        $config = Set-MonitoredDirectoryInteractive -SettingsPath "C:\Config\settings.json" -LogPath "C:\Logs\app.log"
+        Modifies a monitored directory in the specified settings file using interactive prompts.
+    
+    .OUTPUTS
+        PSCustomObject containing the updated settings configuration, or $null if operation was cancelled or no directories exist.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory = $false)]
+        [ValidateNotNullOrEmpty()]
+        [string]$SettingsPath = "settings.json",
+        
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$LogPath
+    )
+    
+    Write-LogInfo -LogPath $LogPath -Message "Starting interactive monitored directory modification"
+    
+    Write-Host "`nModify Monitored Directory" -ForegroundColor Yellow
+    Write-Host "=" * 28 -ForegroundColor Yellow
+    
+    try {
+        $settings = Read-SettingsFile -SettingsPath $SettingsPath -LogPath $LogPath
+        
+        if ($settings.monitoredDirectories.Count -eq 0) {
+            Write-Host "No monitored directories configured to modify." -ForegroundColor Yellow
+            Write-LogInfo -LogPath $LogPath -Message "No monitored directories available for modification"
+            
+            Read-Host "Press Enter to continue"
+            return $null
+        }
+        
+        # Create options for selection
+        $directoryOptions = $settings.monitoredDirectories | ForEach-Object { 
+            $exclusionCount = if ($_.exclusions) { $_.exclusions.Count } else { 0 }
+            "$($_.path) ($exclusionCount exclusions)"
+        }
+        
+        $selection = Show-MultiSelectMenu -Title "Select monitored directory to modify" -Options $directoryOptions -AllowEmpty $true
+        
+        if ($selection.Count -eq 0) {
+            Write-Host "No selection made. Operation cancelled." -ForegroundColor Yellow
+            Write-LogInfo -LogPath $LogPath -Message "Interactive monitored directory modification cancelled - no selection made"
+            return $null
+        }
+        
+        # Extract path from selection
+        $selectedDirectory = $selection[0]
+        $directoryPath = $selectedDirectory -replace ' \(\d+ exclusions\)$', ''
+        $currentDir = $settings.monitoredDirectories | Where-Object { $_.path -eq $directoryPath }
+        
+        Write-Host "`nModifying exclusions for: $directoryPath" -ForegroundColor Cyan
+        Write-Host "Current exclusions:" -ForegroundColor Gray
+        if ($currentDir.exclusions.Count -eq 0) {
+            Write-Host "  None" -ForegroundColor Gray
+        } else {
+            $currentDir.exclusions | ForEach-Object { Write-Host "  - $_" -ForegroundColor Gray }
+        }
+        
+        # Get new exclusions
+        Write-Host "`nEnter new exclusion patterns (subdirectory names to exclude):" -ForegroundColor Cyan
+        Write-Host "Leave blank and press Enter when done" -ForegroundColor Gray
+        
+        $newExclusions = @()
+        $exclusionIndex = 1
+        
+        while ($true) {
+            $exclusion = Read-Host "Exclusion $exclusionIndex (or Enter to finish)"
+            if ([string]::IsNullOrWhiteSpace($exclusion)) {
+                break
+            }
+            $newExclusions += $exclusion.Trim()
+            $exclusionIndex++
+        }
+        
+        Write-LogDebug -LogPath $LogPath -Message "Collected new exclusions for '$directoryPath': $($newExclusions.Count) items"
+        
+        # Confirm modification
+        Write-Host "`nModifying monitored directory: $directoryPath" -ForegroundColor Green
+        Write-Host "  Current exclusions: $($currentDir.exclusions.Count) items" -ForegroundColor Gray
+        Write-Host "  New exclusions: $($newExclusions.Count) items" -ForegroundColor Gray
+        if ($newExclusions.Count -gt 0) {
+            $newExclusions | ForEach-Object { Write-Host "    - $_" -ForegroundColor Gray }
+        }
+        
+        $confirm = Read-Host "Confirm? [Y/N]"
+        
+        if ($confirm -match '^[Yy]') {
+            if ($PSCmdlet.ShouldProcess("Monitored directory '$directoryPath'", "Update exclusions from $($currentDir.exclusions.Count) to $($newExclusions.Count) items")) {
+                $updatedSettings = Set-MonitoredDirectory -Path $directoryPath -Exclusions $newExclusions -SettingsPath $SettingsPath -LogPath $LogPath
+                Write-Host "Monitored directory modified successfully!" -ForegroundColor Green
+                Write-LogInfo -LogPath $LogPath -Message "Interactive monitored directory modification completed successfully: '$directoryPath' exclusions changed from $($currentDir.exclusions.Count) to $($newExclusions.Count) items"
+                
+                Read-Host "`nPress Enter to continue"
+                return $updatedSettings
+            }
+        } else {
+            Write-Host "Operation cancelled." -ForegroundColor Yellow
+            Write-LogInfo -LogPath $LogPath -Message "Interactive monitored directory modification cancelled by user"
+            
+            Read-Host "`nPress Enter to continue"
+            return $null
+        }
+    }
+    catch {
+        Write-LogError -LogPath $LogPath -Message "Failed to modify monitored directory interactively" -Exception $_.Exception
+        Write-Host "Error modifying monitored directory: $($_.Exception.Message)" -ForegroundColor Red
+        
+        Read-Host "`nPress Enter to continue"
+        throw
+    }
+}
+
 # Export all public functions
-Export-ModuleMember -Function Read-SettingsFile, New-SettingsFile, Set-StagingArea, Add-DriveMapping, Remove-DriveMapping, Set-DriveMapping, Add-MonitoredDirectory, Remove-MonitoredDirectory, Set-MonitoredDirectory, Show-MultiSelectMenu
+Export-ModuleMember -Function Read-SettingsFile, New-SettingsFile, Set-StagingArea, Add-DriveMapping, Remove-DriveMapping, Set-DriveMapping, Add-MonitoredDirectory, Remove-MonitoredDirectory, Set-MonitoredDirectory, Show-MultiSelectMenu, Add-DriveMappingInteractive, Remove-DriveMappingInteractive, Set-DriveMappingInteractive, Add-MonitoredDirectoryInteractive, Remove-MonitoredDirectoryInteractive, Set-MonitoredDirectoryInteractive
